@@ -1591,7 +1591,7 @@ test('a beat that can\'t reach what the last request cached waits for the next t
   expect(logs).toContain('beats wait for your next turn: Claude Code cached this conversation anew, out of a beat\'s reach')
   await clock.advance(9 * M)
   expect(forks).toHaveLength(1) // no beat writing the same again
-  expect(await cmd($, '')).toBe('on, every 3m idle (this session\'s) · 0 beats · starts after your next turn')
+  expect(await cmd($, '')).toBe('on, every 3m idle (this session\'s) · 0 beats · waits for your next turn: Claude Code cached this conversation anew, out of a beat\'s reach')
 })
 
 test('soon after a request, a beat writing more than it read missed the cache\'s place, not the cache: it waits, never stops', async ($: Engine, on: On) => {
@@ -1696,6 +1696,8 @@ test('a resumed conversation (--resume, --continue) waits for the next turn, and
   const { clock, forks, logs } = await setup($, on, { settings: { defaultOn: true }, chat: [said('user', 'hi'), said('assistant', 'ok')] })
   expect(logs).toContain('beats wait for your next turn: this conversation was resumed')
   expect((await stateNow($)).session.paused).toBe('this conversation was resumed')
+  // the status says why it waits, and that its count starts here: the beats of the process before are not this one's
+  expect(await cmd($, '')).toBe('on, every 50m idle · 0 beats since the resume · waits for your next turn: this conversation was resumed')
   await clock.advance(IDLE * 2)
   expect(forks).toEqual([]) // a beat would re-read the uncached conversation before the user chose to
   await $.turn.complete(turn)
@@ -1715,7 +1717,7 @@ test('/resume within a session waits for the next turn, and never switches beati
   expect(logs).toContain('beats wait for your next turn: this conversation was resumed')
   await clock.advance(9 * M)
   expect(forks).toEqual([]) // the beat set before the /resume does not come
-  expect(await cmd($, '')).toBe('on, every 3m idle (this session\'s) · 0 beats · starts after your next turn')
+  expect(await cmd($, '')).toBe('on, every 3m idle (this session\'s) · 0 beats since the resume · waits for your next turn: this conversation was resumed')
   await $.turn.complete(turn)
   await clock.advance(3 * M)
   expect(forks).toEqual([13 * M + 1000])
@@ -1924,7 +1926,7 @@ test('/resume starts another conversation: its count and its first-turn hold fro
   await clock.advance(3 * M)
   expect(forks).toEqual([3 * M])
   await $.session.end({ reason: 'resume', sessionId: 's1', resume: { id: 's1' } })
-  expect(await cmd($, '')).toBe('on, every 3m idle (this session\'s) · 0 beats · starts after your next turn')
+  expect(await cmd($, '')).toBe('on, every 3m idle (this session\'s) · 0 beats since the resume · waits for your next turn: this conversation was resumed')
   await $.turn.start({ text: 'build', turnId: 't2' }) // the resumed conversation's first turn here
   await step($, 't2', 0)
   await clock.advance(9 * M)
@@ -2046,6 +2048,16 @@ test('the interval published is the one in effect: auto reads 50, never the null
   await clock.settle()
   expect(live('S1')?.intervalMin).toBe(9)
 })
+
+// a process that has had no turn arms no beat, so nothing else reads the cache's lifetime: a five-minute
+// cache read as the hour's default left `intervalMin: 50` in the records of fresh and resumed sessions alike
+for (const [name, chat] of [['a new session', []], ['a resumed one, waiting for its next turn', [said('user', 'hi'), said('assistant', 'ok')]]] as const) {
+  test(`auto publishes what the cache's lifetime comes to from the start, before any turn: ${name}`, async ($: Engine, on: On) => {
+    const { live } = await setup($, on, { isSubscription: false, settings: { defaultOn: true }, chat: [...chat] })
+    if (!hasId($)) return
+    expect(live('S1')?.intervalMin).toBe(4)
+  })
+}
 
 test('a resumed new process overwrites the opposite state a record of its session id holds', async ($: Engine, on: On) => {
   const { live } = await setup($, on, { seed: { 'live.S1': record }, settings: { defaultOn: false }, chat: [said('user', 'hi'), said('assistant', 'ok')] })

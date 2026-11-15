@@ -717,7 +717,8 @@ function beatNow($: EngineInterface) {
 const every = () => `every ${fmt(idle())} idle`
 const when = (ms: number | undefined) =>
   s.small ? `beats skip: ${s.small}`
-  : ms === undefined ? (stepping ? 'counts from the end of the request on its way' : busy ? 'starts after this turn' : 'starts after your next turn')
+  : ms === undefined ? (stepping ? 'counts from the end of the request on its way' : busy ? 'starts after this turn'
+    : s.enabled && s.paused ? `waits for your next turn: ${s.paused}` : 'starts after your next turn')
   : ms === 0 ? 'beating now' : `next beat in ${fmt(ms)}`
 
 /** Where this session's interval comes from: its own, this folder's, or the settings for all folders. */
@@ -940,6 +941,9 @@ export const register: Register = on => {
     // a reload keeps this session's choice; a new session starts as its folder's settings say
     s = prev ? { ...fresh, ...prev } : { ...fresh, enabled: cfg.defaultOn }
     s.since ??= await $.clock.now() // this process took on this conversation now, unless a reload carried it over
+    // auto reads the cache's lifetime as a beat is armed, which a process waiting for its first turn never does:
+    // read it now, so the state published and answered before then is what auto comes to, not the hour's default
+    ttl = await cacheTtl($)
     // an activation of its own: nothing written yet, nothing ended
     queue = Promise.resolve()
     lastLive = null
@@ -1040,7 +1044,9 @@ export const register: Register = on => {
     }
     const from = intervalFrom()
     const source = from === 'all folders' ? '' : ` (this ${from}'s)`
-    return { text: `on, ${every()}${source} · ${s.beats} beat${s.beats === 1 ? '' : 's'} · ${when(ms)}` }
+    // the count is this process's: one that took over a resumed conversation says so, the beats of the one before unseen
+    const counted = s.paused === RESUMED ? ' since the resume' : ''
+    return { text: `on, ${every()}${source} · ${s.beats} beat${s.beats === 1 ? '' : 's'}${counted} · ${when(ms)}` }
   })
 
   on('tool.call', { tool: 'mcp__cachebeat__state' }, async $ => ({ result: json(await stateOf($)) }))
